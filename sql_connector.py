@@ -5,3 +5,7 @@ def sql_request(request):
     c = conn.cursor()
     respond = c.execute(request)
     return respond.fetchall()
+
+def columns(table_name):
+    return [i[1] for i in sql_request(f"PRAGMA table_info({table_name})")]
+
