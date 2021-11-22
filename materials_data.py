@@ -3,7 +3,7 @@ import sql_connector
 # import math
 
 class FlangeMaterial:
-    def __init__(self, material_name, thickness, temperature):
+    def __init__(self, material_name, thickness, temperature, design_time = "200kh"):
         self.temperature = self.check_number(temperature, "temperature")
         self.material_name = self.check_material_name(material_name)
         self.thickness = self.check_number(thickness, "thickness")
@@ -18,6 +18,10 @@ class FlangeMaterial:
         # Elevated
         self.elevated_data = self.data("elevated")
         self.reh = self.get_reh()
+        self.is_creep = self.check_creep()
+        self.creep_data = self.creep_data()
+        if self.is_creep:
+            self.design_time = design_time
 
     @staticmethod
     def check_material_name(material_name):
@@ -70,12 +74,48 @@ class FlangeMaterial:
             y0, y1 = float(self.elevated_data[f"T{x0}"]), float(self.elevated_data[f"T{x1}"])
         elif self.temperature <= 100:
             x0, x1, y0, y1 = 50, 100, float(self.re), float(self.elevated_data["T100"])
-
+        else:
+            return None
         if isinstance(y0, (int, float)) and isinstance(y1, (int, float)):
             return linear_interpolation(y0, y1, x0, x1, self.temperature)
         else: raise ValueError("Invalid data type in reh()")
 
+    def check_creep(self):
+        respond = sql_connector.sql_request(f""" SELECT * FROM creep WHERE material_name = '{self.material_name}'""")
+        if len(respond) == 0: return False
+        else:
+            creep_df = self.creep_data()
+            temp_mask = creep_df["temperature"] < self.temperature
+            if creep_df[temp_mask].shape[0] > 0: return True
+            else: return False
 
+    def creep_data(self):
+        respond = sql_connector.sql_request(f""" SELECT * FROM creep WHERE material_name = '{self.material_name}'""")
+        data = pd.DataFrame(respond, columns = sql_connector.columns("creep"))
+        return data
 
-print(FlangeMaterial("P195GH", 6.3, 70).reh)
-print(FlangeMaterial("P195GH", 6.3, 325).elevated_data)
+    def get_rz(self):
+        if self.is_creep:
+            from calculations import linear_interpolation
+            data = self.creep_data
+            if self.temperature == int(data.iloc[0]["temperature"]):
+                return data.iloc[0][self.design_time]
+            elif self.temperature > int(data.iloc[-1]["temperature"]):
+                raise ValueError("Temperature out of range!")
+            else:
+                for t in data["temperature"]:
+                    if self.temperature <= t:
+                        break
+                x0, x1 = t - 10, t
+                y0 = data[data["temperature"] == x0][f"T{self.design_time}"].iloc[0]
+                y1 = data[data["temperature"] == x1][f"T{self.design_time}"].iloc[0]
+                # print(y1.iloc[0])
+                return linear_interpolation(y0, y1, x0, x1, self.temperature)
+
+        else: return None
+
+# print(FlangeMaterial("P265GH", 6.3, 500).creep_data())
+# print(FlangeMaterial("P265GH", 6.3, 300).creep_data)
+# print(FlangeMaterial("P265GH", 6.3, 450).is_creep)
+print(FlangeMaterial("P265GH", 6.3, 455).get_rz())
+
