@@ -2,7 +2,7 @@ import pandas as pd
 import sql_connector
 # import math
 
-class FlangeMaterial:
+class Material:
     def __init__(self, material_name, thickness, temperature, design_time = "200kh"):
         self.temperature = self.check_number(temperature, "temperature")
         self.material_name = self.check_material_name(material_name)
@@ -10,18 +10,19 @@ class FlangeMaterial:
         # Ambient
         self.ambient_data = self.data("ambient")
         self.material_num = self.ambient_data["material_num"]
-        self.re = self.get_re()
+
         self.rm_max = self.ambient_data["Rm_max"]
         self.rm_min = self.ambient_data["Rm_min"]
         self.elongation_l = self.ambient_data["elo_l"]
         self.elongation_t = self.ambient_data["elo_t"]
         # Elevated
         self.elevated_data = self.data("elevated")
-        self.reh = self.get_reh()
+
         self.is_creep = self.check_creep()
         self.creep_data = self.creep_data()
         if self.is_creep:
             self.design_time = design_time
+            self.rz = self.get_rz()
 
     @staticmethod
     def check_material_name(material_name):
@@ -46,39 +47,10 @@ class FlangeMaterial:
         columns = sql_connector.columns(which_data)
         return pd.DataFrame(data, columns = columns).squeeze(axis=0)
 
-    def get_re(self):
-        if self.thickness < 16:
-            re = self.ambient_data["T_less_than_16"]
-        elif self.thickness >= 16 and self.thickness < 40:
-            re = self.ambient_data["from16_T_to40"]
-        elif self.thickness >= 40 and self.thickness < 60:
-            re = self.ambient_data["from40_T_to60"]
-        elif self.thickness >= 60 and self.thickness < 100:
-            re = self.ambient_data["from60_T_to100"]
-        else: raise ValueError("Thickness out of range in Ambient Table Data!")
-        if re is None: raise ValueError("No Re for provided thickness!")
-        else: return re
-
     @property
     def max_temp(self):
         max_temp_index =  self.elevated_data.dropna().index[-1]
         return int(max_temp_index[1:])
-
-    def get_reh(self):
-        from calculations import linear_interpolation
-        if self.temperature > 100 and self.temperature <= self.max_temp:
-            for t in range(100,610,50):
-                if self.temperature <= t:
-                    break
-            x0, x1 = t-50, t
-            y0, y1 = float(self.elevated_data[f"T{x0}"]), float(self.elevated_data[f"T{x1}"])
-        elif self.temperature <= 100:
-            x0, x1, y0, y1 = 50, 100, float(self.re), float(self.elevated_data["T100"])
-        else:
-            return None
-        if isinstance(y0, (int, float)) and isinstance(y1, (int, float)):
-            return linear_interpolation(y0, y1, x0, x1, self.temperature)
-        else: raise ValueError("Invalid data type in reh()")
 
     def check_creep(self):
         respond = sql_connector.sql_request(f""" SELECT * FROM creep WHERE material_name = '{self.material_name}'""")
@@ -104,18 +76,57 @@ class FlangeMaterial:
                 raise ValueError("Temperature out of range!")
             else:
                 for t in data["temperature"]:
-                    if self.temperature <= t:
-                        break
+                    if self.temperature <= t: break
                 x0, x1 = t - 10, t
                 y0 = data[data["temperature"] == x0][f"T{self.design_time}"].iloc[0]
                 y1 = data[data["temperature"] == x1][f"T{self.design_time}"].iloc[0]
                 # print(y1.iloc[0])
                 return linear_interpolation(y0, y1, x0, x1, self.temperature)
-
         else: return None
 
-# print(FlangeMaterial("P265GH", 6.3, 500).creep_data())
-# print(FlangeMaterial("P265GH", 6.3, 300).creep_data)
-# print(FlangeMaterial("P265GH", 6.3, 450).is_creep)
-print(FlangeMaterial("P265GH", 6.3, 455).get_rz())
+    # def f_assembly(self):
+    #     return min(self.re / 1.5, self.rm_min / 2.4)
+    #
+    # def f_hydro(self):
+    #     return self.re * 0.95
+    #
+    # def f_operation(self):
+    #     return min(self.re / 1.5, self.rp02 / 1.5, self.rm_min / 2.4)
+
+class EN10216_2(Material):
+    def __init__(self, material_name, thickness, temperature):
+        super().__init__(material_name, thickness, temperature)
+        self.re = self.get_re()
+        self.rp02 = self.get_rp02()
+
+    def get_re(self):
+        if self.thickness < 16:
+            re = self.ambient_data["T_less_than_16"]
+        elif self.thickness >= 16 and self.thickness < 40:
+            re = self.ambient_data["from16_T_to40"]
+        elif self.thickness >= 40 and self.thickness < 60:
+            re = self.ambient_data["from40_T_to60"]
+        elif self.thickness >= 60 and self.thickness < 100:
+            re = self.ambient_data["from60_T_to100"]
+        else: raise ValueError("Thickness out of range in Ambient Table Data!")
+        if re is None: raise ValueError("No Re for provided thickness!")
+        else: return re
+
+    def get_rp02(self):
+        from calculations import linear_interpolation
+        if self.temperature > 100 and self.temperature <= self.max_temp:
+            for t in range(100,610,50):
+                if self.temperature <= t:
+                    break
+            x0, x1 = t-50, t
+            y0, y1 = float(self.elevated_data[f"T{x0}"]), float(self.elevated_data[f"T{x1}"])
+        elif self.temperature <= 100:
+            x0, x1, y0, y1 = 50, 100, float(self.re), float(self.elevated_data["T100"])
+        else:
+            return None
+        if isinstance(y0, (int, float)) and isinstance(y1, (int, float)):
+            return linear_interpolation(y0, y1, x0, x1, self.temperature)
+        else: raise ValueError("Invalid data type in rp02")
+
+print(EN10216_2("P265GH", 6.3, 455).re)
 
